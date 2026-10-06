@@ -17,6 +17,6 @@ public class WelcomeController {
     @Operation(summary = "Show name")
     public String welcome() {
         log.info("GET /name called");
-        return "My name is Bhagyashree Behera";
+        return "Welcome to TrishaAcademy";
     }
 }
