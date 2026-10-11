@@ -121,6 +121,10 @@
         <configuration>
           <!-- @{argLine} keeps the JaCoCo agent; ByteBuddy flag lets Mockito run on JDKs newer than it officially supports -->
           <argLine>@{argLine} -Dnet.bytebuddy.experimental=true -XX:+EnableDynamicAgentLoading</argLine>
+          <!-- Tests use a throw-away in-memory database, never the persistent ./data file -->
+          <systemPropertyVariables>
+            <spring.datasource.url>jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1</spring.datasource.url>
+          </systemPropertyVariables>
         </configuration>
       </plugin>
 

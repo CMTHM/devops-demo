@@ -1,7 +1,8 @@
 # Simple Dockerfile for the TRISHA ACADEMY DevOps Java Demo
 #
 # Build : docker build -t devops-java-demo:1.0.0 .
-# Run   : docker run -d --name devops-java-demo -p 9090:9090 devops-java-demo:1.0.0
+# Run   : docker run -d --name devops-java-demo -p 9090:9090 -v "${PWD}\data:/app/data" devops-java-demo:1.0.0
+#         (PowerShell; the H2 database file is kept in the project's data folder)
 # Open  : http://localhost:9090/name
 
 # 1. Start from the official Maven image (Java 21 + Maven, lightweight Alpine Linux)
@@ -23,5 +24,9 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B clean package -DskipTests
 # 6. The application listens on port 9090 (server.port in application.properties)
 EXPOSE 9090
 
-# 7. Start the application when the container starts
+# 7. The H2 database file is stored in /app/data. Mount the project's data folder here so data
+#    survives container restarts and deletes: docker run -v "${PWD}\data:/app/data" ...
+VOLUME ["/app/data"]
+
+# 8. Start the application when the container starts
 CMD ["java", "-jar", "target/devops-java-demo-1.0.0.jar"]

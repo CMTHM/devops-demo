@@ -64,6 +64,8 @@ devops-java-demo/
 ├── pom.xml                         # Maven build: dependencies, lint, tests, coverage
 ├── Dockerfile                      # Builds the Docker image (Step 13)
 ├── .dockerignore                   # Files Docker does not copy into the image
+├── DB-PERSISTENCE-TESTING.md       # How to test that the H2 data survives restarts (Docker volume)
+├── data/trishadb.mv.db             # H2 database file (created on first start, Step 8)
 ├── .mvn/jvm.config                 # JVM options Maven needs for the formatter on new JDKs
 ├── config/checkstyle/checkstyle.xml# Lint rules
 ├── docs/                           # PDF guides (REST API CRUD guide, Docker course)
@@ -245,20 +247,36 @@ No extra settings are needed in `application.properties`.
 
 ## Step 8 — View the data in the H2 database
 
-The app uses an **H2 in-memory database**. The `students` table is created automatically from `model/Student.java`. Data is **lost when the app stops**.
+The app uses an **H2 file database**. The data is saved in the project folder, so it is **kept when the app stops or restarts**:
+
+```text
+devops-java-demo/
+└── data/
+    └── trishadb.mv.db      # the whole database is this one file
+```
+
+- The `data` folder and the file are created automatically on the first start.
+- The `students` table is created automatically from `model/Student.java` (`spring.jpa.hibernate.ddl-auto=update` keeps existing data).
+- To start with an empty database, stop the app and delete the `data` folder.
+- JUnit tests use a separate in-memory database (`jdbc:h2:mem:testdb`, set in `pom.xml`), so tests never change your data.
 
 | Setting | Value |
 |---------|-------|
-| JDBC URL | `jdbc:h2:mem:trishadb` |
+| JDBC URL | `jdbc:h2:file:./data/trishadb;WRITE_DELAY=0` |
+| Database file | `data/trishadb.mv.db` in the project folder |
 | Username | `sa` |
 | Password | `sa@123` |
 | Table | `students` |
+
+`WRITE_DELAY=0` makes H2 write every change to the file immediately, so no data is lost even if the app is killed.
+
+> Run only **one** app at a time against this file (either `mvn spring-boot:run` or the Docker container). H2 locks the file while it is open.
 
 Steps:
 
 1. Make sure the application is running (Step 5) and insert a student (Step 6 or 7).
 2. Open http://localhost:9090/h2-console.
-3. Set **JDBC URL** to `jdbc:h2:mem:trishadb`, **User Name** to `sa`, **Password** to `sa@123`.
+3. Set **JDBC URL** to `jdbc:h2:file:./data/trishadb`, **User Name** to `sa`, **Password** to `sa@123`.
 4. Click **Connect**.
 5. Run:
 
@@ -390,19 +408,20 @@ Docker packages the application, Java and Maven into one **image**. A running im
 
 ### 13.1 The Dockerfile, line by line
 
-The `Dockerfile` in the project folder has 7 steps:
+The `Dockerfile` in the project folder has 8 steps:
 
 | Step | Instruction | What it does |
 |------|-------------|--------------|
 | 1 | `FROM maven:3.9-eclipse-temurin-21-alpine` | Start from the **official** Maven image (Java 21 + Maven on lightweight Alpine Linux) |
-| 2 | `LABEL maintainer="Bhagyashree Behera"` | Record who maintains the image |
+| 2 | `LABEL maintainer="Developer Team"` | Record who maintains the image |
 | 3 | `WORKDIR /app` | Use `/app` as the working folder inside the image |
 | 4 | `COPY . .` | Copy the project from your computer (first `.`) into `/app` (second `.`) |
-| 5 | `RUN --mount=type=cache,target=/root/.m2 mvn -B package -DskipTests` | Build the JAR. Lint and format checks run here too. The cache keeps downloaded Maven libraries between builds |
+| 5 | `RUN --mount=type=cache,target=/root/.m2 mvn -B clean package -DskipTests` | Build the JAR. Lint and format checks run here too. The cache keeps downloaded Maven libraries between builds |
 | 6 | `EXPOSE 9090` | Document the port the app listens on |
-| 7 | `CMD ["java", "-jar", "target/devops-java-demo-1.0.0.jar"]` | Start the app when the container starts |
+| 7 | `VOLUME ["/app/data"]` | Mark `/app/data` (where the H2 database file lives) as a place for data kept **outside** the container |
+| 8 | `CMD ["java", "-jar", "target/devops-java-demo-1.0.0.jar"]` | Start the app when the container starts |
 
-Files listed in `.dockerignore` (`target/`, `docs/`, IDE files, etc.) are **not** copied into the image.
+Files listed in `.dockerignore` (`target/`, `data/`, `docs/`, IDE files, etc.) are **not** copied into the image. `data/` is excluded so your local database is never baked into the image.
 
 > `maven` and `eclipse-temurin` are **Docker Official Images** — on Docker Hub their URL is `hub.docker.com/_/maven` (the `_/` means official).
 
@@ -439,15 +458,46 @@ Check the image exists:
 docker images devops-java-demo
 ```
 
-### 13.4 Run the container
+### 13.4 Run the container (database kept in the project folder)
+
+Run this from the project folder.
+
+PowerShell (Windows):
+
+```powershell
+docker run -d --name devops-java-demo -p 9090:9090 -v "${PWD}\data:/app/data" devops-java-demo:1.0.0
+```
+
+Git Bash / Linux / macOS:
 
 ```bash
-docker run -d --name devops-java-demo -p 9090:9090 devops-java-demo:1.0.0
+docker run -d --name devops-java-demo -p 9090:9090 -v "$(pwd)/data:/app/data" devops-java-demo:1.0.0
 ```
 
 - `-d` — run in the background.
 - `--name devops-java-demo` — a name to refer to the container.
 - `-p 9090:9090` — map port 9090 on your computer to port 9090 in the container.
+- `-v "<project>/data:/app/data"` — **volume (bind mount)**: the container's `/app/data` folder *is* the project's `data` folder. The database file `data/trishadb.mv.db` is written straight into your project, so it survives `docker stop`, `docker rm` and image rebuilds.
+
+### 13.4.1 Why a volume is needed
+
+A container has its own file system. Anything written inside it is **deleted together with the container** (`docker rm`). Without `-v`, every new container starts with an empty database.
+
+```text
+ Your computer                                  Container
+ D:\...\devops-java-demo\data\   <== -v ==>     /app/data/
+     trishadb.mv.db                                 trishadb.mv.db  (same file)
+```
+
+| Type | Example | Where the data lives | Use it when |
+|------|---------|----------------------|-------------|
+| **Bind mount** (used here) | `-v "${PWD}\data:/app/data"` | A folder you choose — the project's `data` folder | You want to see, back up or share the DB file |
+| **Named volume** | `-v trishadb-data:/app/data` | Managed by Docker (`docker volume ls`) | Servers / production; Docker manages the storage |
+| **No `-v`** | — | Inside the container (anonymous volume) | Throw-away demos — data is lost with the container |
+
+Because the same file is used, you can stop the container and run `mvn spring-boot:run` — you will see the same students.
+
+Step-by-step tests that prove the data is kept: [DB-PERSISTENCE-TESTING.md](./DB-PERSISTENCE-TESTING.md).
 
 Check it is running:
 
@@ -503,8 +553,10 @@ docker rmi devops-java-demo:1.0.0
 ```bash
 docker rm -f devops-java-demo
 docker build -t devops-java-demo:1.0.0 .
-docker run -d --name devops-java-demo -p 9090:9090 devops-java-demo:1.0.0
+docker run -d --name devops-java-demo -p 9090:9090 -v "${PWD}\data:/app/data" devops-java-demo:1.0.0
 ```
+
+The students are still there after the rebuild, because the database file is in the project's `data` folder, not in the image.
 
 ---
 
@@ -521,7 +573,8 @@ docker run -d --name devops-java-demo -p 9090:9090 devops-java-demo:1.0.0
 | Build the JAR | `mvn clean package` |
 | Run the JAR | `java -jar target/devops-java-demo-1.0.0.jar` |
 | Build Docker image | `docker build -t devops-java-demo:1.0.0 .` |
-| Run Docker container | `docker run -d --name devops-java-demo -p 9090:9090 devops-java-demo:1.0.0` |
+| Run Docker container (DB in project `data` folder) | `docker run -d --name devops-java-demo -p 9090:9090 -v "${PWD}\data:/app/data" devops-java-demo:1.0.0` |
+| Reset the database | Stop the app/container, then delete the `data` folder |
 
 ---
 
